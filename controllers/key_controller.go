@@ -52,7 +52,7 @@ type KeyReconciler struct {
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
 func (r *KeyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	log := r.Log.WithValues("key", req.NamespacedName)
+	log := r.Log.WithValues("key", req.Name)
 	key := &b2v1alpha2.Key{}
 
 	if err := r.Get(ctx, types.NamespacedName{Name: req.Name, Namespace: req.Namespace}, key); err != nil {
@@ -65,17 +65,17 @@ func (r *KeyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 		return ctrl.Result{}, err
 	}
 
-	if !controllerutil.ContainsFinalizer(key, keyFinalizer) {
-		log.Info("Adding Finalizer")
-		controllerutil.AddFinalizer(key, keyFinalizer)
-		return ctrl.Result{}, r.Update(ctx, key)
-	}
-
 	if !key.DeletionTimestamp.IsZero() {
 		log.Info("Key is being deleted")
 		return r.reconcileDelete(ctx, key, true)
+	} else {
+		if !controllerutil.ContainsFinalizer(key, keyFinalizer) {
+			log.Info("Adding Finalizer")
+			controllerutil.AddFinalizer(key, keyFinalizer)
+			r.Update(ctx, key)
+		}
+		r.reconcileCreate(ctx, key)
 	}
-	r.reconcileCreate(ctx, key)
 
 	return ctrl.Result{}, nil
 }
@@ -128,7 +128,6 @@ func (r *KeyReconciler) createKeySecret(key *b2v1alpha2.Key, appkey *backblaze.A
 
 func (r *KeyReconciler) createOrUpdateKey(ctx context.Context, key *b2v1alpha2.Key) error {
 	log := r.Log.WithValues("key", key.Namespace)
-	log.Info("create or update key")
 
 	// Check if the key exists
 	if err := r.Get(ctx, types.NamespacedName{Name: key.Name, Namespace: key.Namespace}, key); err != nil {
@@ -207,13 +206,11 @@ func (r *KeyReconciler) createOrUpdateKey(ctx context.Context, key *b2v1alpha2.K
 		r.Status().Update(ctx, key)
 	} else {
 		// reconciling loop
-		log.Info("Key is reconciled")
 		if !reflect.DeepEqual(key.Spec.AtProvider, key.Status.AtProvider) && !key.Status.ToRecreate {
 			log.Info("Key resource exist on cluster, updating state")
 			// Updating resource at cluster
 			key.Status.Reconciled = false
 			key.Status.ToRecreate = true
-			r.Status().Update(ctx, key)
 
 			// Deleting key
 			_, err := r.reconcileDelete(ctx, key, false)
